@@ -1,0 +1,18 @@
+{
+  "bindings": [
+    {
+      "name": "myBlob",
+      "type": "blobTrigger",
+      "direction": "in",
+      "path": "vehicle-images/{name}",
+      "connection": "AzureWebJobsStorage"
+    },
+    {
+      "name": "outputBlob",
+      "type": "blob",
+      "direction": "out",
+      "path": "ocr-results/{name}.json",
+      "connection": "AzureWebJobsStorage"
+    }
+  ]
+}

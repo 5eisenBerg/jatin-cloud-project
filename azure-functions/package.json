@@ -1,0 +1,17 @@
+{
+  "name": "traffic-fine-functions",
+  "version": "1.0.0",
+  "description": "Azure Functions for Traffic Fine OCR Processing",
+  "main": "ocr-processor/index.js",
+  "scripts": {
+    "start": "func start",
+    "test": "jest"
+  },
+  "dependencies": {
+    "mssql": "^10.0.1",
+    "tedious": "^16.6.1",
+    "@azure/cognitiveservices-computervision": "^8.2.0",
+    "@azure/ms-rest-azure-js": "^2.7.0",
+    "uuid": "^9.0.1"
+  }
+}

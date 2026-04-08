@@ -1,0 +1,242 @@
+# GitHub Actions CI/CD Pipeline for Traffic Fine Management System
+# Builds and deploys both frontend and backend to Azure App Service
+
+name: Build and Deploy to Azure
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '18.x'
+  AZURE_WEBAPP_BACKEND: 'trafficfine-api'  # Update after deployment
+  AZURE_WEBAPP_FRONTEND: 'trafficfine-web'  # Update after deployment
+  AZURE_FUNCTIONAPP_NAME: 'trafficfine-func'  # Update after deployment
+
+jobs:
+  # Build Backend
+  build-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: './backend/package-lock.json'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linting
+        run: npm run lint --if-present
+
+      - name: Run tests
+        run: npm test --if-present
+        env:
+          NODE_ENV: test
+
+      - name: Build application
+        run: npm run build --if-present
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend
+          path: |
+            backend/
+            !backend/node_modules/
+          retention-days: 1
+
+  # Build Frontend
+  build-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: './frontend/package-lock.json'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+        env:
+          REACT_APP_API_URL: ${{ secrets.BACKEND_URL }}/api
+          REACT_APP_AZURE_AD_B2C_CLIENT_ID: ${{ secrets.AZURE_AD_B2C_CLIENT_ID }}
+          REACT_APP_AZURE_AD_B2C_TENANT_NAME: ${{ secrets.AZURE_AD_B2C_TENANT_NAME }}
+          REACT_APP_AZURE_AD_B2C_POLICY_NAME: B2C_1_signupsignin
+          REACT_APP_ENVIRONMENT: production
+          CI: false  # Prevent treating warnings as errors
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: frontend/build/
+          retention-days: 1
+
+  # Build Azure Functions
+  build-functions:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./azure-functions
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: './azure-functions/package-lock.json'
+
+      - name: Install dependencies
+        run: npm ci --if-present
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-functions
+          path: azure-functions/
+          retention-days: 1
+
+  # Deploy Backend to Azure
+  deploy-backend:
+    needs: build-backend
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.webapp-url }}
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: backend
+          path: backend
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install production dependencies
+        run: npm ci --only=production
+        working-directory: backend
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure App Service
+        id: deploy
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_BACKEND }}
+          package: backend
+
+  # Deploy Frontend to Azure
+  deploy-frontend:
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.webapp-url }}
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend
+          path: frontend-build
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure App Service
+        id: deploy
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_FRONTEND }}
+          package: frontend-build
+
+  # Deploy Azure Functions
+  deploy-functions:
+    needs: build-functions
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: azure-functions
+          path: azure-functions
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure Functions
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          package: azure-functions
+
+  # Deploy Infrastructure (manual trigger only)
+  deploy-infrastructure:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment:
+      name: infrastructure
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Bicep Template
+        uses: azure/arm-deploy@v1
+        with:
+          resourceGroupName: trafficfine-rg
+          template: ./infrastructure/main.bicep
+          parameters: ./infrastructure/parameters.json
+          deploymentMode: Incremental
